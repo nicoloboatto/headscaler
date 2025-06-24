@@ -17,14 +17,15 @@ headscaler ALL=(ALL) NOPASSWD: ALL
 
 Add your public key to the /home/user/.ssh/authorized_keys file.
 
-Clone / create repo on your control machine; copy the playbook + templates/ folder.
+Clone repo on your control machine.
+
 Edit inventory (inventory.ini)
 ```
 [headscale_stack]
 vpn-01 ansible_host=<domain>
 ```
 
-Edit variables (domains, passwords) at the top of the playbook.
+Edit variables (domains, passwords) in config.yml.
 
 Install Ansible collections (one time):
 ```
