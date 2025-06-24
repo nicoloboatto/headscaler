@@ -1,8 +1,17 @@
 # headscaler
+An ansible script to facilitate the deployment of a dockerized headscale stack.
 
-Step-by-Step Usage
+The final product should be a server running the following:
 
-Create a sudoer user that ansible will use to log in and deploy the stack. Root access will be disabled.
+- Docker + Compose
+- Headscale
+- Headplane GUI
+- Traefik Reverse Proxy
+- Tailscale Node
+
+# Step-by-Step Usage
+
+Create a sudoer user that ansible will use to log in and deploy the stack. **SSH root access will be disabled!**
 ```
 useradd -m -s /bin/bash headscaler
 visudo
