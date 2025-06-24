@@ -1,0 +1,117 @@
+#######################################################################
+# Docker Compose v3.9 – Headscale + Headplane (integrated) stack
+# All containers share an internal bridge network called “stack_net”.
+# Only Traefik publishes ports 80/443 to the host.
+#######################################################################
+
+services:
+  #####################################################################
+  traefik:
+    image: traefik:{{ traefik_version }}
+    command:                                          # static config
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"                                       # ACME challenge
+      - "443:443"                                     # HTTPS
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "traefik-acme:/acme"
+      - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./traefik/webusers:/etc/traefik/webusers:ro"
+    networks: [stack_net]
+    restart: unless-stopped
+    depends_on:
+      - headplane
+      - headscale
+
+  #####################################################################
+  headscale:
+    container_name: headscale
+    image: headscale/headscale:{{ headscale_version }}
+    command: ["serve", "--config", "/etc/headscale/config.yaml"]
+    ports:
+      - "3478:3478" # Headscale builtin DERP server
+    volumes:
+      - "./headscale:/etc/headscale/"
+      - "headscale-data:/var/lib/headscale"
+    networks: [stack_net]
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      # TLS
+      - "traefik.http.routers.headscale.entrypoints=websecure"
+      - "traefik.http.routers.headscale.tls.certresolver=le"
+      # Route
+      - "traefik.http.routers.headscale.rule=Host(`{{ hs_domain }}`)"
+      # Label for headplane integration
+      - "me.tale.headplane.target=headscale"
+      # Port definition
+      - "traefik.http.services.headscale.loadbalancer.server.port={{ hs_port }}"
+
+  #####################################################################
+  headplane:
+    container_name: headplane
+    image: ghcr.io/tale/headplane:{{ headplane_version }}
+    depends_on: [headscale]
+    volumes:
+      - "./headplane/config.yaml:/etc/headplane/config.yaml:ro"  
+      # This should match headscale.config_path in your config.yaml
+      - './headscale/config.yaml:/etc/headscale/config.yaml'
+      # If using dns.extra_records in Headscale (recommended), this should
+      # match the headscale.dns_records_path in your config.yaml
+      - './headscale/dns_records.json:/etc/headscale/dns_records.json'
+      # Headplane stores its data in this directory
+      - './headplane:/var/lib/headplane'
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks: [stack_net]
+    restart: unless-stopped
+    labels:
+        - "traefik.enable=true"
+        # TLS
+        - "traefik.http.routers.headplane.entrypoints=websecure"
+        - "traefik.http.routers.headplane.tls.certresolver=le"
+        # Route
+        - "traefik.http.routers.headplane.rule=Host(`{{ hp_domain }}`)"
+        - "traefik.http.services.headplane.loadbalancer.server.port={{ hp_port }}"
+        # Add middlewares
+        - "traefik.http.routers.headplane.middlewares=plane_auth, to_admin"
+        # Define middlewares
+        - "traefik.http.middlewares.plane_auth.basicauth.usersfile=/etc/traefik/webusers"
+        # Automatic redirection to /admin
+        - "traefik.http.middlewares.to_admin.redirectregex.regex=^https:\\/\\/([^\\/]+)\\/?$$"
+        - "traefik.http.middlewares.to_admin.redirectregex.replacement=https://$$1/admin"
+  
+  #####################################################################
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: tailscale
+    hostname: {{ ts_hostname }}
+    restart: unless-stopped
+    depends_on:
+      - headscale
+
+    # Tailscale needs a real tun interface → host networking + NET_ADMIN
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    volumes:
+      - tailscale-state:/var/lib/tailscale   # machine keys, prefs, certs
+      - /dev/net/tun:/dev/net/tun            # required for tunnel interface
+
+    # Environment variables:
+    env_file:
+      - ./tailscale/tailscale.env            # created in step 2
+    environment:
+      # Fallbacks if .env missing (NO_TITLE = underscore for jinja template)
+      TS_STATE_DIR: "/var/lib/tailscale"
+
+networks:
+  stack_net:
+    driver: bridge
+
+volumes:
+  headscale-data:     # SQLite DB & node data
+  traefik-acme:       # certificates.json
+  tailscale-state:    # Tailscale node data

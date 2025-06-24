@@ -1,0 +1,229 @@
+- name: Harden host & deploy Headscale + Headplane (integrated mode)
+  hosts: headscale_stack            # <-- define in inventory.ini
+  become: true
+
+  #####################################################################
+  # ── Editable variables ─────────────────────────────────────────────
+  #####################################################################
+  vars_files:
+  # absolute path version
+  - "./config.yml"
+
+  #####################################################################
+  # ── PRE-TASK: fully patch OS and create deploy user ────────────────
+  #####################################################################
+  pre_tasks:
+    - name: Apply security updates first
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+
+  #####################################################################
+  # ── CIS baseline roles (dev-sec) + Docker Install ──────────────────
+  #####################################################################
+  roles:
+    - geerlingguy.docker
+    - devsec.hardening.os_hardening
+    - devsec.hardening.ssh_hardening
+
+  #####################################################################
+  # ── MAIN TASKS ─────────────────────────────────────────────────────
+  #####################################################################
+  tasks:
+    # Packages & host security services
+    - name: Install security pkgs
+      ansible.builtin.apt:
+        name:
+          - ufw
+          - fail2ban
+          - auditd
+        state: present
+
+    - name: Ensure Fail2Ban & auditd running
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: yes
+        state: started
+      loop: [fail2ban, auditd]
+      when: not ansible_check_mode
+
+    - name: Harden firewall (deny all → allow 80/443/3478)
+      ansible.builtin.ufw:
+        rule: allow
+        port: "{{ item }}"
+        src: 0.0.0.0/0 # This makes the rule ipv4-only
+        proto: tcp
+      loop: [80, 443, 3478]
+
+    - name: Allow SSH on tailscale + public (rate-limited)
+      ansible.builtin.ufw:
+        rule: limit               # use "allow" if you don’t want rate-limit
+        port: 22
+        src: 0.0.0.0/0 # This makes the rule ipv4-only
+        proto: tcp
+
+    - ansible.builtin.ufw:
+        state: enabled
+        direction: incoming
+        policy: deny
+
+    # Directory skeleton
+    - name: Create stack directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ stack_root }}"
+        - "{{ stack_root }}/headscale"
+        - "{{ stack_root }}/headplane"
+        - "{{ stack_root }}/traefik"
+        - "{{ stack_root }}/tailscale"
+
+    # Secrets: bcrypt hash for Basic-Auth
+    - name: Generate all secrets
+      ansible.builtin.set_fact:
+        plane_password: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=hexdigits') }}"
+    - ansible.builtin.set_fact:
+        plane_password_hash: "{{ plane_password | password_hash('bcrypt') }}"
+    - ansible.builtin.set_fact:
+        hp_cookie_secret: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=hexdigits') }}"
+
+    # Render configuration templates
+    - name: Headscale config
+      ansible.builtin.template:
+        src: templates/headscale-config.yaml.j2
+        dest: "{{ stack_root }}/headscale/config.yaml"
+        mode: "0640"
+
+    - name: Headplane config
+      ansible.builtin.template:
+        src: templates/headplane-config.yaml.j2
+        dest: "{{ stack_root }}/headplane/config.yaml"
+        mode: "0640"
+    
+    - name: Headplane users file for traefik
+      ansible.builtin.template:
+        src: templates/traefik-webusers.j2
+        dest: "{{ stack_root }}/traefik/webusers"
+        mode: "0640"
+
+    - name: Traefik static config
+      ansible.builtin.template:
+        src: templates/traefik.yml.j2
+        dest: "{{ stack_root }}/traefik/traefik.yml"
+        mode: "0644"
+
+    - name: Compose file
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ stack_root }}/docker-compose.yml"
+        mode: "0644"
+
+    # Pull & start stack
+    - name: Pull container images
+      community.docker.docker_compose_v2:
+        project_src: "{{ stack_root }}"
+        pull: always
+      when: not ansible_check_mode
+
+    - name: Bring stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ stack_root }}"
+        services:
+          - headscale
+          - headplane
+          - traefik
+        state: present
+        recreate: always
+      when: not ansible_check_mode
+      tags: hs_apikey
+    
+    - name: Pause for 1 minute to allow headscale to start properly
+      ansible.builtin.pause:
+        minutes: 1
+      tags: hs_apikey
+
+    - name: Generate HS API key
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ stack_root }}"
+        service: headscale
+        command: "headscale apikeys create -e {{ hs_apikey_lifetime }}"
+      when: not ansible_check_mode
+      register: hs_api_key
+      tags: hs_apikey
+
+    ############################################################
+    # At this point the stack is up, let's add a tailscale node
+    ############################################################
+    
+    - name: Create headscale user with given name and get its ID
+      tags: ts_node
+      when: not ansible_check_mode
+      block:
+        - name: Try to create user
+          community.docker.docker_compose_v2_exec:
+            project_src: "{{ stack_root }}"
+            service: headscale
+            command: headscale users create {{ ts_user }} --force --output json
+          register: user_create
+        - name: Get user ID of new user
+          ansible.builtin.set_fact:
+            ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('id') }}"
+      rescue:
+        - name: If user exists, list users
+          community.docker.docker_compose_v2_exec:
+            project_src: "{{ stack_root }}"
+            service: headscale
+            command: headscale users list --output json
+          register: user_create
+        - name: Get ID of existing user
+          ansible.builtin.set_fact:
+            ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('[?name==`' ~ ts_user ~ '`].id | [0]') }}"
+
+    - name: "Create a reusable preauth key"
+      when: not ansible_check_mode
+      tags: ts_node
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ stack_root }}"
+        service: headscale
+        command: "headscale preauthkeys create --reusable --expiration {{ ts_authkey_lifetime }} --user {{ ts_user_id }}"
+      register: preauth_out
+
+    - name: "Extract preauth key string"
+      when: not ansible_check_mode
+      tags: ts_node
+      ansible.builtin.set_fact:
+        ts_authkey: "{{ preauth_out.stdout | regex_search('[A-Za-z0-9]{48}') }}"
+      failed_when: ts_authkey == ""
+  
+    - name: Tailscale env file
+      when: not ansible_check_mode
+      tags: ts_node
+      ansible.builtin.template:
+        src: templates/tailscale.env.j2
+        dest: "{{ stack_root }}/tailscale/tailscale.env"
+        mode: "0644"
+
+    - name: Restart tailscale
+      when: not ansible_check_mode
+      tags: ts_node
+      community.docker.docker_compose_v2:
+        project_src: "{{ stack_root }}"
+        services: [tailscale]
+        recreate: always
+
+    # Display admin info
+    - name: Show initial UI credentials
+      ansible.builtin.debug:
+        msg:
+          - "┌──────────────────────────────────────────────────────────────────"
+          - "│  Headscale URL    : https://{{ hs_domain }}"
+          - "│  Headplane URL    : https://{{ hp_domain }}"
+          - "│  Plane login      : {{ plane_user }} / {{ plane_password }}"
+          - "│  HP cookie secret : {{ hp_cookie_secret }}"
+          - "│  HS API Key       : {{ hs_api_key.stdout }}"                                                   
+          - "└──────────────────────────────────────────────────────────────────"
+

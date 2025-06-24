@@ -1,0 +1,41 @@
+    # Sudoer user you have created on the target machine
+    ansible_user: headscaler
+    
+    # Versions
+    headscale_version:  "v0.26.1"
+    headplane_version:  "0.6.0"
+    traefik_version:    "v2.11"
+
+    # Domains / contact
+    hs_domain:  "hs.example.com"
+    hp_domain:  "plane.example.com"
+    hs_magic_dns_domain: "net.example.com"
+    acme_email: "whatever@example.com"
+
+    # Headscale user to assign node to
+    ts_user:    "admin"
+    ts_authkey_lifetime: 1000d
+    ts_hostname: "headscale-server"
+
+    # Basic-Auth username for Plane
+    plane_user:     "admin"
+    hs_apikey_lifetime: 1000d
+    hs_ipv4_range: "100.100.10.0/24"
+
+    # Directory where all stack files live
+    stack_root:  "/opt/headscale-stack"
+
+    # Ports *inside* the Docker private network
+    hs_port:   8080
+    hp_port:   3000
+    grpc_port: 50443
+    stun_port: 3478
+
+    # Docker role vars
+    # Edition can be one of: 'ce' (Community Edition) or 'ee' (Enterprise Edition).
+    docker_edition: 'ce'
+    docker_packages:
+        - "docker-{{ docker_edition }}"
+        - "docker-{{ docker_edition }}-cli"
+        - "docker-{{ docker_edition }}-rootless-extras"
+    docker_packages_state: present
