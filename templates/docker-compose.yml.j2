@@ -30,7 +30,7 @@ services:
     image: headscale/headscale:{{ headscale_version }}
     command: ["serve", "--config", "/etc/headscale/config.yaml"]
     ports:
-      - "3478:3478" # Headscale builtin DERP server
+      - "3478:3478/udp" # Headscale builtin DERP server
     volumes:
       - "./headscale:/etc/headscale/"
       - "headscale-data:/var/lib/headscale"

@@ -47,13 +47,21 @@
       loop: [fail2ban, auditd]
       when: not ansible_check_mode
 
-    - name: Harden firewall (deny all → allow 80/443/3478)
+    - name: Harden firewall (deny all → allow 80/443 tcp)
       ansible.builtin.ufw:
         rule: allow
         port: "{{ item }}"
-        src: 0.0.0.0/0 # This makes the rule ipv4-only
+        src: 0.0.0.0/0 # This should make the rule ipv4-only
         proto: tcp
-      loop: [80, 443, 3478]
+      loop: [80, 443]
+
+    - name: Harden firewall (deny all → allow 3478 udp)
+      ansible.builtin.ufw:
+        rule: allow
+        port: "{{ item }}"
+        src: 0.0.0.0/0 # This should make the rule ipv4-only
+        proto: udp
+      loop: [3478]
 
     - name: Allow SSH on tailscale + public (rate-limited)
       ansible.builtin.ufw:
