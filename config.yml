@@ -2,9 +2,9 @@
     ansible_user: headscaler
     
     # Versions
-    headscale_version:  "v0.26.1"
-    headplane_version:  "0.6.0"
-    traefik_version:    "v2.11"
+    headscale_version:  "v0.27.1"
+    headplane_version:  "0.6.1"
+    traefik_version:    "v3.6.7"
 
     # Domains / contact
     hs_domain:  "hs.example.com"
