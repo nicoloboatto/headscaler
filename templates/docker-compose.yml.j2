@@ -59,7 +59,7 @@ services:
       - './headscale/config.yaml:/etc/headscale/config.yaml'
       # If using dns.extra_records in Headscale (recommended), this should
       # match the headscale.dns_records_path in your config.yaml
-      - './headscale/dns_records.json:/etc/headscale/dns_records.json'
+      - './headscale/extra-records.json:/etc/headscale/extra-records.json'
       # Headplane stores its data in this directory
       - './headplane:/var/lib/headplane'
       - "/var/run/docker.sock:/var/run/docker.sock"
