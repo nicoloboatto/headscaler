@@ -9,7 +9,7 @@ The final product should be a server running the following:
 - Traefik Reverse Proxy
 - Tailscale Node
 
-# Step-by-Step Usage
+# Step-by-Step First Setup
 
 Create a sudoer user that ansible will use to log in and deploy the stack. **SSH root access will be disabled!**
 ```
@@ -36,7 +36,7 @@ vpn-01 ansible_host=<domain>
 
 Edit variables (domains, passwords) in config.yml.
 
-Install Ansible collections (one time):
+Install Ansible collections:
 ```
 ansible-galaxy collection install devsec.hardening community.docker
 ansible-galaxy role install geerlingguy.docker
@@ -59,5 +59,16 @@ https://hs.<domain> → Tailscale clients can log in.
 https://plane.<domain> → Basic-Auth (admin / password)
 ```
 
-Update – bump version vars, rerun playbook.
-Compose recreates only changed containers.
+# Update
+
+Update Ansible collections:
+```
+ansible-galaxy collection install -U devsec.hardening community.docker
+ansible-galaxy role install -U geerlingguy.docker
+```
+
+Pull latest version of the playbook or change versions manually and rerun the playbook.
+
+# DNS
+
+Records can be set from the headplane UI or from the `headscale/extra-records.json` file.
