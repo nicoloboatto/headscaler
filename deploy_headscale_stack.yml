@@ -106,6 +106,13 @@
         dest: "{{ stack_root }}/headscale/config.yaml"
         mode: "0640"
 
+    - name: Empty DNS records file
+      copy:
+        content: ""
+        dest: "{{ stack_root }}/headscale/extra-records.json"
+        force: false
+        mode: "0640"
+
     - name: Headplane config
       ansible.builtin.template:
         src: templates/headplane-config.yaml.j2
