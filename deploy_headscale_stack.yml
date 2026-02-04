@@ -108,7 +108,7 @@
 
     - name: Empty DNS records file
       copy:
-        content: ""
+        content: "[]"
         dest: "{{ stack_root }}/headscale/extra-records.json"
         force: false
         mode: "0640"
