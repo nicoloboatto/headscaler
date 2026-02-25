@@ -1,5 +1,5 @@
 # headscaler
-An ansible script to facilitate the deployment of a dockerized headscale + headplane stack.
+An ansible script to facilitate the deployment of a dockerized [headscale](https://github.com/juanfont/headscale) + [headplane](https://github.com/tale/headplane) stack.
 
 The final product should be a server running the following:
 
@@ -8,6 +8,8 @@ The final product should be a server running the following:
 - Headplane GUI
 - Traefik Reverse Proxy
 - Tailscale Node
+
+The Headplane GUI will be protected with HTTP Basic Auth. Implementing SSO, if required, is left as an excercise to the reader.
 
 # Step-by-Step First Setup
 
