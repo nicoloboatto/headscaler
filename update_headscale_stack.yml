@@ -118,7 +118,7 @@
     # -----------------------------------------------------------------------
     # Incremental headscale upgrade: one minor version at a time.
     # -----------------------------------------------------------------------
-    - name: "Incremental headscale upgrade: {{ step_version }}"
+    - name: Incremental headscale upgrade steps
       ansible.builtin.include_tasks: tasks/headscale_step.yml
       loop: "{{ headscale_upgrade_path }}"
       loop_control:
@@ -155,14 +155,19 @@
     # -----------------------------------------------------------------------
     # Final health check and summary.
     # -----------------------------------------------------------------------
+    - name: Get headscale container IP for health check
+      ansible.builtin.shell: "{% raw %}docker inspect headscale --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'{% endraw %}"
+      register: headscale_ip
+      changed_when: false
+
     - name: Final headscale health check
-      ansible.builtin.command:
-        cmd: docker exec headscale wget -qO- http://localhost:{{ hs_port }}/health
+      ansible.builtin.uri:
+        url: "http://{{ headscale_ip.stdout | trim }}:{{ hs_port }}/health"
+        status_code: 200
       register: final_health
-      until: final_health.rc == 0
+      until: final_health.status == 200
       retries: 12
       delay: 10
-      changed_when: false
 
     - name: Show running container summary
       ansible.builtin.command:
