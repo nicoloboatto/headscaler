@@ -116,6 +116,18 @@
           }}
 
     # -----------------------------------------------------------------------
+    # Re-render headscale config before any restart so that config format
+    # changes introduced by the new version are applied up front.
+    # -----------------------------------------------------------------------
+    - name: Render headscale config from template
+      ansible.builtin.template:
+        src: templates/headscale-config.yaml.j2
+        dest: "{{ stack_root }}/headscale/config.yaml"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # -----------------------------------------------------------------------
     # Incremental headscale upgrade: one minor version at a time.
     # -----------------------------------------------------------------------
     - name: Incremental headscale upgrade steps
