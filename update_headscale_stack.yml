@@ -1,0 +1,230 @@
+---
+# Update playbook for the Headscale stack.
+#
+# Headscale SQLite migrations are forward-only and sequential — skipping a
+# minor version can break the database schema. This playbook automatically
+# steps through every intermediate minor version between what is currently
+# running and the target version defined in config.yml.
+#
+# Headplane and Traefik have no such constraint and are updated directly.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini update_headscale_stack.yml
+
+- name: Update Headscale stack (incremental headscale, direct for others)
+  hosts: headscale_stack
+  become: true
+  vars_files:
+    - "./config.yml"
+  vars:
+    hs_releases_url: "https://api.github.com/repos/juanfont/headscale/releases?per_page=100"
+
+  pre_tasks:
+    - name: Apply OS security updates
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+
+  tasks:
+    # -----------------------------------------------------------------------
+    # Detect the version currently running inside the headscale container.
+    # docker inspect is used rather than `headscale version` because it works
+    # even when the container is mid-migration or in an unhealthy state.
+    # -----------------------------------------------------------------------
+    - name: Get running headscale image name
+      ansible.builtin.shell: "docker inspect headscale --format '{{ '{{' }} .Config.Image {{ '}}' }}'"
+      register: running_image
+      changed_when: false
+      failed_when: false
+
+    - name: Set current headscale version fact
+      ansible.builtin.set_fact:
+        # If the container does not exist yet, default to the target version
+        # so the upgrade path comes out empty and the loop is a no-op.
+        current_headscale_version: >-
+          {{
+            running_image.stdout | regex_replace('^.*:', '')
+            if running_image.rc == 0 and running_image.stdout != ''
+            else headscale_version
+          }}
+
+    - name: Show current and target headscale versions
+      ansible.builtin.debug:
+        msg: "Headscale: current={{ current_headscale_version }}  target={{ headscale_version }}"
+
+    # -----------------------------------------------------------------------
+    # Compute the ordered list of versions to step through.
+    # Only runs when an upgrade is actually needed.
+    # -----------------------------------------------------------------------
+    - name: Fetch headscale releases from GitHub
+      ansible.builtin.uri:
+        url: "{{ hs_releases_url }}"
+        return_content: yes
+        headers:
+          Accept: "application/vnd.github+json"
+      register: gh_releases
+      when: current_headscale_version != headscale_version
+
+    - name: Build list of stable release tags
+      ansible.builtin.set_fact:
+        all_stable_tags: >-
+          {{
+            gh_releases.json
+            | rejectattr('prerelease', 'equalto', true)
+            | rejectattr('draft', 'equalto', true)
+            | map(attribute='tag_name')
+            | list
+          }}
+      when: current_headscale_version != headscale_version
+
+    - name: Compute incremental upgrade path
+      ansible.builtin.set_fact:
+        # For each intermediate minor version (current_minor+1 … target_minor-1),
+        # pick the highest patch release available. Always end with the exact
+        # configured target version.
+        headscale_upgrade_path: >-
+          {%- set current_minor = current_headscale_version | regex_replace('^v\d+\.(\d+)\..*', '\1') | int -%}
+          {%- set target_minor  = headscale_version         | regex_replace('^v\d+\.(\d+)\..*', '\1') | int -%}
+          {%- set current_major = current_headscale_version | regex_replace('^v(\d+)\..*', '\1') | int -%}
+          {%- set path = [] -%}
+          {%- for minor in range(current_minor + 1, target_minor) -%}
+            {%- set minor_tags = all_stable_tags
+                  | select('match', '^v' ~ current_major ~ '\.' ~ minor ~ '\.')
+                  | list
+                  | community.general.version_sort
+            -%}
+            {%- if minor_tags | length > 0 -%}
+              {%- set _ = path.append(minor_tags | last) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set _ = path.append(headscale_version) -%}
+          {{ path }}
+      when: current_headscale_version != headscale_version
+
+    - name: Set empty upgrade path when already at target
+      ansible.builtin.set_fact:
+        headscale_upgrade_path: []
+      when: current_headscale_version == headscale_version
+
+    - name: Show computed upgrade path
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'Upgrade path: ' ~ headscale_upgrade_path | join(' → ')
+            if headscale_upgrade_path | length > 0
+            else 'Already at target version — no headscale upgrade needed'
+          }}
+
+    # -----------------------------------------------------------------------
+    # Incremental headscale upgrade: one minor version at a time.
+    # -----------------------------------------------------------------------
+    - name: "Incremental headscale upgrade: {{ step_version }}"
+      loop: "{{ headscale_upgrade_path }}"
+      loop_control:
+        loop_var: step_version
+        label: "{{ step_version }}"
+      block:
+        - name: "Patch image tag in docker-compose.yml → {{ step_version }}"
+          ansible.builtin.lineinfile:
+            path: "{{ stack_root }}/docker-compose.yml"
+            regexp: '^\s+image:\s+headscale/headscale:'
+            line: "    image: headscale/headscale:{{ step_version }}"
+
+        - name: "Pull headscale image {{ step_version }}"
+          ansible.builtin.command:
+            cmd: docker compose pull headscale
+            chdir: "{{ stack_root }}"
+          changed_when: true
+
+        - name: "Restart headscale at {{ step_version }}"
+          ansible.builtin.command:
+            # --no-deps:        do not restart headplane or traefik
+            # --force-recreate: always replace the container even if compose
+            #                   did not detect an image change via its own hash
+            cmd: docker compose up -d --no-deps --force-recreate headscale
+            chdir: "{{ stack_root }}"
+          changed_when: true
+
+        - name: "Wait for headscale to become healthy at {{ step_version }}"
+          # Port 8080 is not published to the host, so the health check must
+          # run inside the container network via docker exec.
+          ansible.builtin.command:
+            cmd: docker exec headscale wget -qO- http://localhost:{{ hs_port }}/health
+          register: hs_health
+          until: hs_health.rc == 0
+          retries: 18
+          delay: 10
+          changed_when: false
+
+        - name: "Verify headscale container is still running at {{ step_version }}"
+          ansible.builtin.shell: "docker inspect headscale --format '{{ '{{' }} .State.Status {{ '}}' }}'"
+          register: container_state
+          changed_when: false
+          failed_when: "'running' not in container_state.stdout"
+
+      rescue:
+        - name: "UPGRADE FAILED at {{ step_version }} — halting"
+          ansible.builtin.fail:
+            msg: |
+              Headscale upgrade to {{ step_version }} failed.
+              The SQLite database may have been partially migrated.
+              DO NOT downgrade the container image without consulting the
+              headscale migration docs — schema migrations are one-way.
+              Investigate with: docker compose -f {{ stack_root }}/docker-compose.yml logs headscale
+
+    # -----------------------------------------------------------------------
+    # Direct updates: headplane and traefik (no sequential migration needed).
+    # -----------------------------------------------------------------------
+    - name: Patch headplane image tag in docker-compose.yml
+      ansible.builtin.lineinfile:
+        path: "{{ stack_root }}/docker-compose.yml"
+        regexp: '^\s+image:\s+ghcr\.io/tale/headplane:'
+        line: "    image: ghcr.io/tale/headplane:{{ headplane_version }}"
+
+    - name: Patch traefik image tag in docker-compose.yml
+      ansible.builtin.lineinfile:
+        path: "{{ stack_root }}/docker-compose.yml"
+        regexp: '^\s+image:\s+traefik:'
+        line: "    image: traefik:{{ traefik_version }}"
+
+    - name: Pull headplane and traefik images
+      ansible.builtin.command:
+        cmd: docker compose pull headplane traefik
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Restart headplane and traefik
+      ansible.builtin.command:
+        cmd: docker compose up -d --no-deps --force-recreate headplane traefik
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    # -----------------------------------------------------------------------
+    # Final health check and summary.
+    # -----------------------------------------------------------------------
+    - name: Final headscale health check
+      ansible.builtin.command:
+        cmd: docker exec headscale wget -qO- http://localhost:{{ hs_port }}/health
+      register: final_health
+      until: final_health.rc == 0
+      retries: 12
+      delay: 10
+      changed_when: false
+
+    - name: Show running container summary
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ stack_root }}"
+      register: compose_ps
+      changed_when: false
+
+    - name: Container summary
+      ansible.builtin.debug:
+        msg: "{{ compose_ps.stdout_lines }}"
+
+    - name: Update summary
+      ansible.builtin.debug:
+        msg:
+          - "Headscale : {{ current_headscale_version }} → {{ headscale_version }}{% if headscale_upgrade_path | length > 0 %} (via {{ headscale_upgrade_path | join(' → ') }}){% endif %}"
+          - "Headplane : {{ headplane_version }}"
+          - "Traefik   : {{ traefik_version }}"

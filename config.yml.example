@@ -1,8 +1,8 @@
     # Sudoer user you have created on the target machine
     ansible_user: headscaler
-    
+
     # Versions
-    headscale_version:  "v0.27.1"
+    headscale_version:  "v0.28.0"
     headplane_version:  "0.6.1"
     traefik_version:    "v3.6.7"
 
@@ -10,7 +10,7 @@
     hs_domain:  "hs.example.com"
     hp_domain:  "plane.example.com"
     hs_magic_dns_domain: "net.example.com"
-    acme_email: "whatever@example.com"
+    acme_email: "acme@example.com"
 
     # Headscale user to assign node to
     ts_user:    "admin"
