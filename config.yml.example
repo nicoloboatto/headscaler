@@ -29,7 +29,6 @@
     # Ports *inside* the Docker private network
     hs_port:   8080
     hp_port:   3000
-    grpc_port: 50443
     stun_port: 3478
 
     # Docker role vars
