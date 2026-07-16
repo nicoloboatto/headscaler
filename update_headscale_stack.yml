@@ -129,7 +129,21 @@
     # -----------------------------------------------------------------------
     # Re-render all config templates before any restarts so structural
     # changes and config format updates are applied atomically.
+    #
+    # hp_cookie_secret is generated at deploy time and never stored in
+    # config.yml — read it back from the live config so re-renders don't
+    # rotate the secret and invalidate all existing sessions.
     # -----------------------------------------------------------------------
+    - name: Read hp_cookie_secret from deployed headplane config
+      ansible.builtin.shell: >
+        python3 -c "import yaml,sys; d=yaml.safe_load(open('{{ stack_root }}/headplane/config.yaml')); print(d['server']['cookie_secret'])"
+      register: cookie_secret_read
+      changed_when: false
+
+    - name: Set hp_cookie_secret fact from deployed config
+      ansible.builtin.set_fact:
+        hp_cookie_secret: "{{ cookie_secret_read.stdout | trim }}"
+
     - name: Render headscale config from template
       ansible.builtin.template:
         src: templates/headscale-config.yaml.j2
