@@ -170,6 +170,7 @@
     # container can always authenticate even when the old key has expired.
     # -----------------------------------------------------------------------
     - name: Look up headscale user for tailscale
+      tags: [tailscale]
       block:
         - name: "Try to create headscale user {{ ts_user }}"
           community.docker.docker_compose_v2_exec:
@@ -192,6 +193,7 @@
             ts_user_id: "{{ user_list.stdout | from_json | community.general.json_query('[?name==`' ~ ts_user ~ '`].id | [0]') }}"
 
     - name: Create new tailscale pre-auth key
+      tags: [tailscale]
       community.docker.docker_compose_v2_exec:
         project_src: "{{ stack_root }}"
         service: headscale
@@ -199,17 +201,20 @@
       register: preauth_out
 
     - name: Extract pre-auth key
+      tags: [tailscale]
       ansible.builtin.set_fact:
         ts_authkey: "{{ preauth_out.stdout | regex_search('[A-Za-z0-9]{48}') }}"
       failed_when: ts_authkey == ""
 
     - name: Re-render tailscale env file
+      tags: [tailscale]
       ansible.builtin.template:
         src: templates/tailscale.env.j2
         dest: "{{ stack_root }}/tailscale/tailscale.env"
         mode: "0644"
 
     - name: Restart tailscale with refreshed key
+      tags: [tailscale]
       community.docker.docker_compose_v2:
         project_src: "{{ stack_root }}"
         services: [tailscale]
