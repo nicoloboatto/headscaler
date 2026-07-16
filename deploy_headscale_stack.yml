@@ -212,7 +212,7 @@
       tags: ts_node
       ansible.builtin.set_fact:
         ts_authkey: "{{ preauth_out.stdout | regex_search('[A-Za-z0-9]{48}') }}"
-      failed_when: ts_authkey == ""
+      failed_when: ts_authkey is none or ts_authkey == ""
   
     - name: Tailscale env file
       when: not ansible_check_mode

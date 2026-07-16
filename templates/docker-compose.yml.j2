@@ -85,7 +85,7 @@ services:
   tailscale:
     image: tailscale/tailscale:stable
     container_name: tailscale
-    hostname: {{ ts_hostname }}
+    hostname: "{{ ts_hostname }}"
     restart: unless-stopped
     depends_on:
       - headscale

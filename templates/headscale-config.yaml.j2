@@ -24,22 +24,6 @@ listen_addr: "0.0.0.0:{{ hs_port }}"
 # to keep this endpoint private to your internal network
 metrics_listen_addr: 127.0.0.1:9090
 
-# Address to listen for gRPC.
-# gRPC is used for controlling a headscale server
-# remotely with the CLI
-# Note: Remote access _only_ works if you have
-# valid certificates.
-#
-# For production:
-# grpc_listen_addr: 0.0.0.0:50443
-grpc_listen_addr: "0.0.0.0:{{ grpc_port }}"
-
-# Allow the gRPC admin interface to run in INSECURE
-# mode. This is not recommended as the traffic will
-# be unencrypted. Only enable if you know what you
-# are doing.
-grpc_allow_insecure: false
-
 # The Noise section includes specific configuration for the
 # TS2021 Noise protocol
 noise:
@@ -86,7 +70,7 @@ derp:
     # When the embedded DERP server is enabled stun_listen_addr MUST be defined.
     #
     # For more details on how this works, check this great article: https://tailscale.com/blog/how-tailscale-works/
-    stun_listen_addr: "0.0.0.0:3478"
+    stun_listen_addr: "0.0.0.0:{{ stun_port }}"
 
     # Private key used to encrypt the traffic between headscale DERP and
     # Tailscale clients. A missing key will be automatically generated.
