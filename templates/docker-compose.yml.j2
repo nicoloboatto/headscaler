@@ -83,7 +83,7 @@ services:
   
   #####################################################################
   tailscale:
-    image: tailscale/tailscale:stable
+    image: tailscale/tailscale:{{ tailscale_version }}
     container_name: tailscale
     hostname: "{{ ts_hostname }}"
     restart: unless-stopped

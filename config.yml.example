@@ -5,6 +5,7 @@
     headscale_version:  "v0.28.0"
     headplane_version:  "0.6.1"
     traefik_version:    "v3.6.7"
+    tailscale_version:  "stable"
 
     # Domains / contact
     hs_domain:  "hs.example.com"

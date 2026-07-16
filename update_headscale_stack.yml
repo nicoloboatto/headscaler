@@ -116,8 +116,19 @@
           }}
 
     # -----------------------------------------------------------------------
-    # Re-render headscale config before any restart so that config format
-    # changes introduced by the new version are applied up front.
+    # Back up SQLite before any migration — headscale migrations are
+    # one-way and cannot be rolled back by downgrading the image.
+    # -----------------------------------------------------------------------
+    - name: Back up headscale SQLite database before upgrade
+      ansible.builtin.command:
+        cmd: docker compose exec headscale cp /var/lib/headscale/db.sqlite /var/lib/headscale/db.sqlite.bak
+        chdir: "{{ stack_root }}"
+      changed_when: true
+      when: headscale_upgrade_path | length > 0
+
+    # -----------------------------------------------------------------------
+    # Re-render all config templates before any restarts so structural
+    # changes and config format updates are applied atomically.
     # -----------------------------------------------------------------------
     - name: Render headscale config from template
       ansible.builtin.template:
@@ -125,7 +136,25 @@
         dest: "{{ stack_root }}/headscale/config.yaml"
         owner: root
         group: root
-        mode: '0644'
+        mode: '0640'
+
+    - name: Render headplane config from template
+      ansible.builtin.template:
+        src: templates/headplane-config.yaml.j2
+        dest: "{{ stack_root }}/headplane/config.yaml"
+        mode: "0640"
+
+    - name: Render traefik static config from template
+      ansible.builtin.template:
+        src: templates/traefik.yml.j2
+        dest: "{{ stack_root }}/traefik/traefik.yml"
+        mode: "0644"
+
+    - name: Render traefik basic-auth users file from template
+      ansible.builtin.template:
+        src: templates/traefik-webusers.j2
+        dest: "{{ stack_root }}/traefik/webusers"
+        mode: "0640"
 
     # -----------------------------------------------------------------------
     # Incremental headscale upgrade: one minor version at a time.
@@ -151,6 +180,12 @@
         path: "{{ stack_root }}/docker-compose.yml"
         regexp: '^\s+image:\s+traefik:'
         line: "    image: traefik:{{ traefik_version }}"
+
+    - name: Patch tailscale image tag in docker-compose.yml
+      ansible.builtin.lineinfile:
+        path: "{{ stack_root }}/docker-compose.yml"
+        regexp: '^\s+image:\s+tailscale/tailscale:'
+        line: "    image: tailscale/tailscale:{{ tailscale_version }}"
 
     - name: Pull headplane and traefik images
       ansible.builtin.command:
@@ -212,6 +247,13 @@
         src: templates/tailscale.env.j2
         dest: "{{ stack_root }}/tailscale/tailscale.env"
         mode: "0600"
+
+    - name: Pull tailscale image
+      tags: [tailscale]
+      ansible.builtin.command:
+        cmd: docker compose pull tailscale
+        chdir: "{{ stack_root }}"
+      changed_when: true
 
     - name: Restart tailscale with refreshed key
       tags: [tailscale]

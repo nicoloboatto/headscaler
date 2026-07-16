@@ -156,9 +156,22 @@
       when: not ansible_check_mode
       tags: hs_apikey
     
-    - name: Pause for 1 minute to allow headscale to start properly
-      ansible.builtin.pause:
-        minutes: 1
+    - name: Get headscale container IP
+      ansible.builtin.shell: "{% raw %}docker inspect headscale --format '{{(index .NetworkSettings.Networks \"stack_net\").IPAddress}}'{% endraw %}"
+      register: hs_ip_deploy
+      changed_when: false
+      when: not ansible_check_mode
+      tags: hs_apikey
+
+    - name: Wait for headscale to become healthy
+      ansible.builtin.uri:
+        url: "http://{{ hs_ip_deploy.stdout | trim }}:{{ hs_port }}/health"
+        status_code: 200
+      register: hs_deploy_health
+      until: hs_deploy_health.status == 200
+      retries: 18
+      delay: 10
+      when: not ansible_check_mode
       tags: hs_apikey
 
     - name: Generate HS API key
