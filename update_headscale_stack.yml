@@ -136,13 +136,22 @@
     # -----------------------------------------------------------------------
     - name: Read hp_cookie_secret from deployed headplane config
       ansible.builtin.shell: >
-        python3 -c "import yaml,sys; d=yaml.safe_load(open('{{ stack_root }}/headplane/config.yaml')); print(d['server']['cookie_secret'])"
+        python3 -c "import yaml; d=yaml.safe_load(open('{{ stack_root }}/headplane/config.yaml')); print(d['server']['cookie_secret'])"
       register: cookie_secret_read
       changed_when: false
 
     - name: Set hp_cookie_secret fact from deployed config
       ansible.builtin.set_fact:
         hp_cookie_secret: "{{ cookie_secret_read.stdout | trim }}"
+
+    - name: Read plane_password_hash from deployed traefik webusers file
+      ansible.builtin.shell: "awk -F: '{print $2}' {{ stack_root }}/traefik/webusers"
+      register: plane_hash_read
+      changed_when: false
+
+    - name: Set plane_password_hash fact from deployed webusers
+      ansible.builtin.set_fact:
+        plane_password_hash: "{{ plane_hash_read.stdout | trim }}"
 
     - name: Render headscale config from template
       ansible.builtin.template:
