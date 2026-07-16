@@ -1,102 +1,142 @@
 # headscaler
-An ansible script to facilitate the deployment of a dockerized [headscale](https://github.com/juanfont/headscale) + [headplane](https://github.com/tale/headplane) stack.
+An Ansible playbook to deploy a hardened, dockerized [headscale](https://github.com/juanfont/headscale) + [headplane](https://github.com/tale/headplane) stack.
 
-The final product should be a server running the following:
+The deployed stack runs:
 
 - Docker + Compose
-- Headscale
-- Headplane GUI
-- Traefik Reverse Proxy
-- Tailscale Node
+- Headscale (VPN control plane)
+- Headplane (web UI)
+- Traefik (reverse proxy with automatic Let's Encrypt TLS)
+- Tailscale (VPN node on the server itself)
 
-The Headplane GUI will be protected with HTTP Basic Auth. Implementing SSO, if required, is left as an excercise to the reader.
+Headplane is protected with HTTP Basic Auth. OIDC configuration is available in `templates/headplane-config.yaml.j2` if you need SSO.
 
-# Step-by-Step First Setup
+---
 
-## Server Preparation
+# First-Time Setup
 
-Spin up a server with a public IP and two DNS A records both pointing to it. In this repo I use the following:
-- A -> hs.example.com
-- A -> plane.example.com
+## 1. Server
 
-SSH into the server, create a sudoer user that ansible will use to log in and deploy the stack. **SSH root access will be disabled!**
-```
+Spin up a server with a public IP and two DNS A records pointing to it:
+- `hs.example.com` → your server IP
+- `plane.example.com` → your server IP
+
+SSH in and create the sudoer user Ansible will use. **SSH root access will be disabled by the hardening role.**
+
+```bash
 useradd -m -s /bin/bash headscaler
 visudo
 ```
 
-Edit the file and add the following line:
+Add this line:
 ```
-# See sudoers(5) for more information on "@include" directives:
-@includedir /etc/sudoers.d
 headscaler ALL=(ALL) NOPASSWD: ALL
 ```
 
-Add your local machine's public key to the /home/headscaler/.ssh/authorized_keys file.
+Copy your local machine's public key to `/home/headscaler/.ssh/authorized_keys`.
 
-## Local Machine
+## 2. Local Machine
 
-Clone this repo on your local machine.
-```
+Clone the repo:
+```bash
 git clone https://github.com/nicoloboatto/headscaler.git
+cd headscaler
 ```
 
-**Edit variables (URLs, passwords) in config.yml.** and edit inventory to contain your headscale server URL (inventory.ini)
+Install Ansible dependencies:
+```bash
+ansible-galaxy install -r requirements.yml
 ```
+
+Create your local config files from the examples — these are gitignored and never committed:
+```bash
+cp config.yml.example config.yml
+cp inventory.ini.example inventory.ini
+```
+
+Edit `config.yml` with your domains, email, and version pins. Edit `inventory.ini` with your server's hostname:
+```ini
 [headscale_stack]
-vpn-01 ansible_host=<Headscale Server URL>
+hs-01 ansible_host=hs.example.com
 ```
 
-Install Ansible collections:
-```
-ansible-galaxy collection install devsec.hardening community.docker
-ansible-galaxy role install geerlingguy.docker
-```
+## 3. Deploy
 
-Dry-run
-```
+Dry-run first:
+```bash
 ansible-playbook -i inventory.ini deploy_headscale_stack.yml --check
 ```
 
-Deploy
-```
+Deploy:
+```bash
 ansible-playbook -i inventory.ini deploy_headscale_stack.yml
 ```
 
-At the end of the deployment, the following information will be printed. Note it down for later.
+At the end of the run, credentials are printed. **Save them — they are not stored anywhere.**
 ```
 ┌──────────────────────────────────────────────────────────────────
-│  Headscale URL    : https://<YOUR_HEADSCALE_URL>
-│  Headplane URL    : https://<YOUR_HEADPLANE_URL>
-│  Plane login      : <HEADPLANE_USER> / <HEADPLANE_PASSWORD>
-│  HP cookie secret : <HP_COOKIE_SECRET>
-│  HS API Key       : <HS_API_KEY>                                               
+│  Headscale URL    : https://hs.example.com
+│  Headplane URL    : https://plane.example.com
+│  Plane login      : admin / <generated-password>
+│  HP cookie secret : <generated-secret>
+│  HS API Key       : <generated-api-key>
 └──────────────────────────────────────────────────────────────────
 ```
 
-Verify
+## 4. Verify
 
-You should now be able to use your tailscale client to log in through your headscale server.
-```
-tailscale login --login-server https://<YOUR_HEADSCALE_URL>
-```
-
-The headplane web interface should be available at the URL you configured. You will be prompted for you HTTP Basic Auth credentials and for the headscale API key. Enter the ones shown at the end of the deployment process.
-```
-https://<YOUR_HEADPLANE_URL>
+Connect a Tailscale client:
+```bash
+tailscale login --login-server https://hs.example.com
 ```
 
-# Update
+Open the Headplane UI at `https://plane.example.com`. You'll be prompted for the Basic Auth credentials and the Headscale API key shown above.
 
-Update Ansible collections:
+---
+
+# Updating the Stack
+
+The update playbook handles headscale's requirement that SQLite migrations run sequentially — it steps through every intermediate minor version between what's running and the target, backing up the database before it starts.
+
+Headplane and Traefik are updated directly (no sequential migration required).
+
+Set the target versions in `config.yml`, then run:
+```bash
+ansible-playbook -i inventory.ini update_headscale_stack.yml
 ```
-ansible-galaxy collection install -U devsec.hardening community.docker
-ansible-galaxy role install -U geerlingguy.docker
+
+To update only the Tailscale node (e.g., to refresh an expired pre-auth key):
+```bash
+ansible-playbook -i inventory.ini update_headscale_stack.yml --tags tailscale
 ```
 
-Pull the latest version of the playbook, or update the version variables manually, then re-run the playbook.
-Your database data and any custom DNS records you configured will be preserved.
+To update Ansible dependencies:
+```bash
+ansible-galaxy install -r requirements.yml --force
+```
 
-# DNS
+---
 
-Records can be set from the headplane UI or from the `headscale/extra-records.json` file located on your server after deployment.
+# Configuration
+
+All variables live in `config.yml` (created from `config.yml.example`). Key settings:
+
+| Variable | Purpose |
+|---|---|
+| `headscale_version` | Target headscale version (e.g. `v0.29.2`) |
+| `headplane_version` | Target headplane version (e.g. `0.7.0`) |
+| `traefik_version` | Target Traefik version (e.g. `v3.7.7`) |
+| `tailscale_version` | Target Tailscale version (e.g. `stable`) |
+| `hs_domain` | Public domain for headscale |
+| `hp_domain` | Public domain for headplane |
+| `acme_email` | Email for Let's Encrypt |
+| `ts_user` | Headscale user the server node registers under |
+| `ts_authkey_lifetime` | Pre-auth key lifetime (e.g. `1000d`) |
+
+Only stable releases should be used for `headscale_version`. The update playbook automatically filters out pre-releases and draft releases when computing the upgrade path.
+
+---
+
+# DNS Records
+
+Custom DNS records (for MagicDNS) can be managed from the Headplane UI or by editing `headscale/extra-records.json` directly on the server after deployment.
