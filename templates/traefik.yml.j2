@@ -2,14 +2,21 @@
 # Minimal static config – focuses on secure defaults
 #######################################################################
 entryPoints:
-  web:          { address: ":80" }
-  websecure:    { address: ":443" }
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
 
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
-
 
 certificatesResolvers:
   le:
@@ -18,3 +25,10 @@ certificatesResolvers:
       storage: /acme/acme.json
       httpChallenge:
         entryPoint: web
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+
+accessLog: {}

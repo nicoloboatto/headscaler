@@ -82,7 +82,7 @@
         state: directory
         owner: root
         group: root
-        mode: "0755"
+        mode: "0750"
       loop:
         - "{{ stack_root }}"
         - "{{ stack_root }}/headscale"
@@ -220,7 +220,7 @@
       ansible.builtin.template:
         src: templates/tailscale.env.j2
         dest: "{{ stack_root }}/tailscale/tailscale.env"
-        mode: "0644"
+        mode: "0600"
 
     - name: Restart tailscale
       when: not ansible_check_mode

@@ -211,7 +211,7 @@
       ansible.builtin.template:
         src: templates/tailscale.env.j2
         dest: "{{ stack_root }}/tailscale/tailscale.env"
-        mode: "0644"
+        mode: "0600"
 
     - name: Restart tailscale with refreshed key
       tags: [tailscale]
