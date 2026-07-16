@@ -165,6 +165,57 @@
       changed_when: true
 
     # -----------------------------------------------------------------------
+    # Tailscale: regenerate pre-auth key and restart.
+    # The key has a finite lifetime; refresh it on every update run so the
+    # container can always authenticate even when the old key has expired.
+    # -----------------------------------------------------------------------
+    - name: Look up headscale user for tailscale
+      block:
+        - name: "Try to create headscale user {{ ts_user }}"
+          community.docker.docker_compose_v2_exec:
+            project_src: "{{ stack_root }}"
+            service: headscale
+            command: "headscale users create {{ ts_user }} --force --output json"
+          register: user_create
+        - name: Set user ID from create output
+          ansible.builtin.set_fact:
+            ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('id') }}"
+      rescue:
+        - name: "List users to find {{ ts_user }}"
+          community.docker.docker_compose_v2_exec:
+            project_src: "{{ stack_root }}"
+            service: headscale
+            command: "headscale users list --output json"
+          register: user_list
+        - name: Set user ID from list
+          ansible.builtin.set_fact:
+            ts_user_id: "{{ user_list.stdout | from_json | community.general.json_query('[?name==`' ~ ts_user ~ '`].id | [0]') }}"
+
+    - name: Create new tailscale pre-auth key
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ stack_root }}"
+        service: headscale
+        command: "headscale preauthkeys create --reusable --expiration {{ ts_authkey_lifetime }} --user {{ ts_user_id }}"
+      register: preauth_out
+
+    - name: Extract pre-auth key
+      ansible.builtin.set_fact:
+        ts_authkey: "{{ preauth_out.stdout | regex_search('[A-Za-z0-9]{48}') }}"
+      failed_when: ts_authkey == ""
+
+    - name: Re-render tailscale env file
+      ansible.builtin.template:
+        src: templates/tailscale.env.j2
+        dest: "{{ stack_root }}/tailscale/tailscale.env"
+        mode: "0644"
+
+    - name: Restart tailscale with refreshed key
+      community.docker.docker_compose_v2:
+        project_src: "{{ stack_root }}"
+        services: [tailscale]
+        recreate: always
+
+    # -----------------------------------------------------------------------
     # Final health check and summary.
     # -----------------------------------------------------------------------
     - name: Get headscale container IP for health check
