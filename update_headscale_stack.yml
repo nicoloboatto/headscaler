@@ -255,13 +255,13 @@
       community.docker.docker_compose_v2_exec:
         project_src: "{{ stack_root }}"
         service: headscale
-        command: "headscale preauthkeys create --reusable --expiration {{ ts_authkey_lifetime }} --user {{ ts_user_id }}"
+        command: "headscale preauthkeys create --reusable --expiration {{ ts_authkey_lifetime }} --user {{ ts_user_id }} --output json"
       register: preauth_out
 
     - name: Extract pre-auth key
       tags: [tailscale]
       ansible.builtin.set_fact:
-        ts_authkey: "{{ preauth_out.stdout | regex_search('[A-Za-z0-9]{48}') }}"
+        ts_authkey: "{{ (preauth_out.stdout | from_json).key }}"
       failed_when: ts_authkey is none or ts_authkey == ""
 
     - name: Re-render tailscale env file
