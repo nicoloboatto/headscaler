@@ -289,7 +289,9 @@
     # Final health check and summary.
     # -----------------------------------------------------------------------
     - name: Get headscale container IP for health check
-      ansible.builtin.shell: "{% raw %}docker inspect headscale --format '{{(index .NetworkSettings.Networks \"stack_net\").IPAddress}}'{% endraw %}"
+      ansible.builtin.shell: >
+        {% raw %}docker inspect headscale --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'{% endraw %}
+        | awk '{print $1}'
       register: headscale_ip
       changed_when: false
 

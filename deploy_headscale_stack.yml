@@ -157,7 +157,9 @@
       tags: hs_apikey
     
     - name: Get headscale container IP
-      ansible.builtin.shell: "{% raw %}docker inspect headscale --format '{{(index .NetworkSettings.Networks \"stack_net\").IPAddress}}'{% endraw %}"
+      ansible.builtin.shell: >
+        {% raw %}docker inspect headscale --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'{% endraw %}
+        | awk '{print $1}'
       register: hs_ip_deploy
       changed_when: false
       when: not ansible_check_mode
