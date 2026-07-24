@@ -190,29 +190,36 @@
     # At this point the stack is up, let's add a tailscale node
     ############################################################
     
-    - name: Create headscale user with given name and get its ID
+    - name: List headscale users
       tags: ts_node
       when: not ansible_check_mode
-      block:
-        - name: Try to create user
-          community.docker.docker_compose_v2_exec:
-            project_src: "{{ stack_root }}"
-            service: headscale
-            command: headscale users create {{ ts_user }} --force --output json
-          register: user_create
-        - name: Get user ID of new user
-          ansible.builtin.set_fact:
-            ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('id') }}"
-      rescue:
-        - name: If user exists, list users
-          community.docker.docker_compose_v2_exec:
-            project_src: "{{ stack_root }}"
-            service: headscale
-            command: headscale users list --output json
-          register: user_create
-        - name: Get ID of existing user
-          ansible.builtin.set_fact:
-            ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('[?name==`' ~ ts_user ~ '`].id | [0]') }}"
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ stack_root }}"
+        service: headscale
+        command: headscale users list --output json
+      register: user_list
+      changed_when: false
+
+    - name: Set user ID from existing user
+      tags: ts_node
+      when: not ansible_check_mode
+      ansible.builtin.set_fact:
+        ts_user_id: "{{ user_list.stdout | from_json | community.general.json_query('[?name==`' ~ ts_user ~ '`].id | [0]') }}"
+
+    - name: "Create headscale user {{ ts_user }} if it doesn't exist yet"
+      tags: ts_node
+      when: not ansible_check_mode and (ts_user_id is none or ts_user_id == '')
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ stack_root }}"
+        service: headscale
+        command: "headscale users create {{ ts_user }} --output json"
+      register: user_create
+
+    - name: Set user ID from newly created user
+      tags: ts_node
+      when: not ansible_check_mode and (ts_user_id is none or ts_user_id == '')
+      ansible.builtin.set_fact:
+        ts_user_id: "{{ user_create.stdout | from_json | community.general.json_query('id') }}"
 
     - name: "Create a reusable preauth key"
       when: not ansible_check_mode
