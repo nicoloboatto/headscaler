@@ -153,6 +153,7 @@
           - traefik
         state: present
         recreate: always
+        remove_orphans: true
       when: not ansible_check_mode
       tags: hs_apikey
     
@@ -244,6 +245,7 @@
         project_src: "{{ stack_root }}"
         services: [tailscale]
         recreate: always
+        remove_orphans: true
 
     # Display admin info
     - name: Show initial UI credentials
