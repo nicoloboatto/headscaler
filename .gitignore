@@ -1,2 +1,4 @@
 config.yml
 inventory.ini
+backups/
+extra-records/

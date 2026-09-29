@@ -120,11 +120,68 @@
     # one-way and cannot be rolled back by downgrading the image.
     # -----------------------------------------------------------------------
     - name: Back up headscale SQLite database before upgrade
+      # The headscale image ships no shell/coreutils, so `exec cp` inside the
+      # container isn't possible. `docker compose cp` copies via the daemon
+      # instead, and lands the backup on the host rather than in the same
+      # volume as the live db.
       ansible.builtin.command:
-        cmd: docker compose exec headscale cp /var/lib/headscale/db.sqlite /var/lib/headscale/db.sqlite.bak
+        cmd: "docker compose cp headscale:/var/lib/headscale/db.sqlite {{ stack_root }}/db.sqlite.bak"
         chdir: "{{ stack_root }}"
       changed_when: true
       when: headscale_upgrade_path | length > 0
+
+    - name: Fetch SQLite backup to local machine
+      ansible.builtin.fetch:
+        src: "{{ stack_root }}/db.sqlite.bak"
+        dest: "backups/{{ inventory_hostname }}/db.sqlite.{{ current_headscale_version }}.bak"
+        flat: yes
+      when: headscale_upgrade_path | length > 0
+
+    # -----------------------------------------------------------------------
+    # Mirror extra-records.json between the local repo and the remote host.
+    # It's live state (edited via headplane/API on the server, or by hand
+    # locally) that no template ever re-renders, so whichever side changed
+    # most recently wins and is synced to the other. Headscale watches this
+    # file for changes, so no restart is needed for it to pick up an update.
+    # -----------------------------------------------------------------------
+    - name: Ensure local extra-records mirror directory exists
+      ansible.builtin.file:
+        path: "extra-records/{{ inventory_hostname }}"
+        state: directory
+      delegate_to: localhost
+      become: false
+
+    - name: Stat remote extra-records.json
+      ansible.builtin.stat:
+        path: "{{ stack_root }}/headscale/extra-records.json"
+      register: remote_extra_records
+
+    - name: Stat local extra-records.json
+      ansible.builtin.stat:
+        path: "extra-records/{{ inventory_hostname }}/extra-records.json"
+      delegate_to: localhost
+      become: false
+      register: local_extra_records
+
+    - name: Push local extra-records.json to remote (local is newer or remote missing)
+      ansible.builtin.copy:
+        src: "extra-records/{{ inventory_hostname }}/extra-records.json"
+        dest: "{{ stack_root }}/headscale/extra-records.json"
+        mode: "0640"
+      when: >
+        local_extra_records.stat.exists and
+        (not remote_extra_records.stat.exists or
+         local_extra_records.stat.mtime > remote_extra_records.stat.mtime)
+
+    - name: Pull remote extra-records.json to local (remote is newer or local missing)
+      ansible.builtin.fetch:
+        src: "{{ stack_root }}/headscale/extra-records.json"
+        dest: "extra-records/{{ inventory_hostname }}/extra-records.json"
+        flat: yes
+      when: >
+        remote_extra_records.stat.exists and
+        (not local_extra_records.stat.exists or
+         remote_extra_records.stat.mtime > local_extra_records.stat.mtime)
 
     # -----------------------------------------------------------------------
     # Re-render all config templates before any restarts so structural
