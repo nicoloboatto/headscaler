@@ -21,7 +21,7 @@
     # Basic-Auth username for Plane
     plane_user:     "admin"
     hs_apikey_lifetime: 1000d
-    hs_ipv4_range: "100.100.10.0/24"
+    hs_ipv4_range: "100.64.0.0/24"
 
     # Directory where all stack files live
     stack_root:  "/opt/headscale-stack"
