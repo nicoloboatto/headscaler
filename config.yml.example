@@ -2,9 +2,9 @@
     ansible_user: headscaler
 
     # Versions
-    headscale_version:  "v0.28.0"
-    headplane_version:  "0.6.1"
-    traefik_version:    "v3.6.7"
+    headscale_version:  "v0.29.4"
+    headplane_version:  "0.7.0"
+    traefik_version:    "v3.7.7"
     tailscale_version:  "stable"
 
     # Domains / contact
