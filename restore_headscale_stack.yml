@@ -1,0 +1,140 @@
+---
+# Stand-alone restore playbook for the Headscale stack.
+#
+# Restores a snapshot taken by backup_headscale_stack.yml: db.sqlite,
+# extra-records.json, and the Plane login password hash. Stops the affected
+# containers, overwrites their state, then brings them back up.
+#
+# This OVERWRITES the live database and certs — there is no undo beyond
+# taking a fresh backup first. Both safety vars below are required so the
+# playbook cannot be run by accident.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini restore_headscale_stack.yml \
+#     -e backup_timestamp=20260930T143000 \
+#     -e confirm_restore=yes
+#
+# List available backups with: ls backups/<host>/
+
+- name: Restore Headscale stack from a local backup
+  hosts: headscale_stack
+  become: true
+  vars_files:
+    - "./config.yml"
+
+  tasks:
+    - name: Require backup_timestamp and confirm_restore
+      ansible.builtin.assert:
+        that:
+          - backup_timestamp is defined
+          - confirm_restore is defined
+          - confirm_restore | string == "yes"
+        fail_msg: >-
+          This playbook overwrites the live database and certs. Run with
+          -e backup_timestamp=<timestamp> -e confirm_restore=yes — see
+          `ls backups/{{ inventory_hostname }}/` for available timestamps.
+        quiet: true
+
+    - name: Set local backup directory fact
+      ansible.builtin.set_fact:
+        local_backup_dir: "backups/{{ inventory_hostname }}/{{ backup_timestamp }}"
+
+    - name: Check local backup files exist
+      ansible.builtin.stat:
+        path: "{{ local_backup_dir }}/{{ item }}"
+      loop:
+        - db.sqlite
+        - extra-records.json
+        - webusers
+      register: backup_files
+      delegate_to: localhost
+      become: false
+
+    - name: Fail if any backup file is missing
+      ansible.builtin.assert:
+        that: "item.stat.exists"
+        fail_msg: "Missing {{ item.item }} in {{ local_backup_dir }}/ — is this a complete backup?"
+        quiet: true
+      loop: "{{ backup_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # -------------------------------------------------------------------
+    # Stop headscale before touching its live db — it needs to be quiesced
+    # so the file can be safely swapped. Tailscale is untouched — it isn't
+    # part of this backup/restore.
+    # -------------------------------------------------------------------
+    - name: Stop headscale
+      ansible.builtin.command:
+        cmd: docker compose stop headscale
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    # -------------------------------------------------------------------
+    # Host-mounted files — plain bind mounts, copy directly. Headscale
+    # watches extra-records.json for changes and traefik re-reads webusers
+    # per request, so neither needs a restart, but both are refreshed by
+    # the recreate at the end anyway.
+    # -------------------------------------------------------------------
+    - name: Restore extra-records.json
+      ansible.builtin.copy:
+        src: "{{ local_backup_dir }}/extra-records.json"
+        dest: "{{ stack_root }}/headscale/extra-records.json"
+        mode: "0640"
+
+    - name: Restore traefik webusers
+      ansible.builtin.copy:
+        src: "{{ local_backup_dir }}/webusers"
+        dest: "{{ stack_root }}/traefik/webusers"
+        mode: "0640"
+
+    # -------------------------------------------------------------------
+    # SQLite lives in a named volume — stage on the host, then
+    # `docker compose cp` into the (stopped) container.
+    # -------------------------------------------------------------------
+    - name: Stage db.sqlite on the remote host
+      ansible.builtin.copy:
+        src: "{{ local_backup_dir }}/db.sqlite"
+        dest: "{{ stack_root }}/db.sqlite.restore"
+        mode: "0640"
+
+    - name: Copy db.sqlite into the headscale container
+      ansible.builtin.command:
+        cmd: "docker compose cp {{ stack_root }}/db.sqlite.restore headscale:/var/lib/headscale/db.sqlite"
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Remove staged db.sqlite.restore
+      ansible.builtin.file:
+        path: "{{ stack_root }}/db.sqlite.restore"
+        state: absent
+
+    # -------------------------------------------------------------------
+    # Bring headscale back up, and recreate traefik so it picks up the
+    # restored webusers file.
+    # -------------------------------------------------------------------
+    - name: Start headscale and recreate traefik
+      ansible.builtin.command:
+        cmd: docker compose up -d --force-recreate headscale traefik
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Get headscale container IP for health check
+      ansible.builtin.shell: >
+        {% raw %}docker inspect headscale --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'{% endraw %}
+        | awk '{print $1}'
+      register: headscale_ip
+      changed_when: false
+
+    - name: Wait for headscale to become healthy
+      ansible.builtin.uri:
+        url: "http://{{ headscale_ip.stdout | trim }}:{{ hs_port }}/health"
+        status_code: 200
+      register: hs_health
+      until: hs_health.status == 200
+      retries: 18
+      delay: 10
+
+    - name: Restore summary
+      ansible.builtin.debug:
+        msg: "Restored {{ inventory_hostname }} from backup {{ backup_timestamp }}"

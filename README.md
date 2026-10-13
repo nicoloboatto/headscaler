@@ -117,6 +117,27 @@ ansible-galaxy install -r requirements.yml --force
 
 ---
 
+# Backup & Restore
+
+`backup_headscale_stack.yml` snapshots everything that isn't reproducible from this repo + `config.yml`: the SQLite database (nodes, users, and ACL policy, since `policy.mode` is `database`), `extra-records.json`, and the Plane login password hash (not preserved by a fresh `deploy_headscale_stack.yml` run — that generates a new one every time). Headplane's `cookie_secret` and the Let's Encrypt certs aren't included: losing them just forces a re-login or a cert re-issue, both of which self-heal automatically.
+
+```bash
+ansible-playbook -i inventory.ini backup_headscale_stack.yml
+```
+
+This writes to `backups/<host>/<timestamp>/` in your local checkout (gitignored). `update_headscale_stack.yml` also takes its own SQLite-only snapshot automatically before every headscale version bump — this playbook is for on-demand, full backups.
+
+To restore a snapshot:
+```bash
+ansible-playbook -i inventory.ini restore_headscale_stack.yml \
+  -e backup_timestamp=20260930T143000 \
+  -e confirm_restore=yes
+```
+
+List available backups for a host with `ls backups/<host>/`. Both `-e` flags are required — the playbook refuses to run without them, since it stops `headscale`, `headplane`, and `traefik`, overwrites their state, and restarts them. There's no undo beyond restoring an earlier backup, so take a fresh backup before restoring if the current state has anything worth keeping.
+
+---
+
 # Configuration
 
 All variables live in `config.yml` (created from `config.yml.example`). Key settings:
@@ -139,4 +160,4 @@ Only stable releases should be used for `headscale_version`. The update playbook
 
 # DNS Records
 
-Custom DNS records (for MagicDNS) can be managed from the Headplane UI or by editing `headscale/extra-records.json` directly on the server after deployment.
+Custom DNS records (for MagicDNS) can be managed from the Headplane UI, or by editing `extra-records.json` directly on the server or in the local `extra-records/<host>/extra-records.json` mirror. `update_headscale_stack.yml` syncs the two on every run — whichever copy was edited most recently wins. Headscale watches the file for changes, so no restart is needed for an edit to take effect.

@@ -1,0 +1,85 @@
+---
+# Stand-alone backup playbook for the Headscale stack.
+#
+# Snapshots everything that isn't reproducible from this repo + config.yml:
+#   - db.sqlite            (nodes, users, ACL policy — policy.mode is "database")
+#   - extra-records.json   (live custom DNS records, never re-templated)
+#   - traefik/webusers     (contains the generated Plane login password hash —
+#                            update_headscale_stack.yml preserves it across
+#                            updates, but deploy_headscale_stack.yml generates
+#                            a fresh one every run, so a lost host means a
+#                            lost password without this backup)
+#
+# Everything else under stack_root is either fully reproducible from
+# config.yml (deploy_headscale_stack.yml / update_headscale_stack.yml) or
+# self-heals with no functional impact — Headplane's cookie_secret just
+# invalidates sessions if regenerated, and Traefik re-issues acme.json's
+# certs automatically on startup — so neither is worth backing up.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini backup_headscale_stack.yml
+#
+# Writes to backups/<host>/<timestamp>/ in the local repo checkout.
+
+- name: Back up Headscale stack
+  hosts: headscale_stack
+  become: true
+  vars_files:
+    - "./config.yml"
+
+  tasks:
+    - name: Set backup timestamp fact
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
+
+    - name: Set local backup directory fact
+      ansible.builtin.set_fact:
+        local_backup_dir: "backups/{{ inventory_hostname }}/{{ backup_timestamp }}"
+
+    - name: Ensure local backup directory exists
+      ansible.builtin.file:
+        path: "{{ local_backup_dir }}"
+        state: directory
+      delegate_to: localhost
+      become: false
+
+    # -------------------------------------------------------------------
+    # SQLite database — lives in the headscale-data named volume, so it
+    # has to be pulled out via `docker compose cp` (the image has no
+    # shell/coreutils for an `exec cp`).
+    # -------------------------------------------------------------------
+    - name: Copy db.sqlite out of the headscale container
+      ansible.builtin.command:
+        cmd: "docker compose cp headscale:/var/lib/headscale/db.sqlite {{ stack_root }}/db.sqlite.bak"
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Fetch db.sqlite to local backup
+      ansible.builtin.fetch:
+        src: "{{ stack_root }}/db.sqlite.bak"
+        dest: "{{ local_backup_dir }}/db.sqlite"
+        flat: yes
+
+    - name: Remove remote db.sqlite.bak temp file
+      ansible.builtin.file:
+        path: "{{ stack_root }}/db.sqlite.bak"
+        state: absent
+
+    # -------------------------------------------------------------------
+    # Host-mounted files — no docker cp needed, they're plain bind mounts.
+    # -------------------------------------------------------------------
+    - name: Fetch extra-records.json to local backup
+      ansible.builtin.fetch:
+        src: "{{ stack_root }}/headscale/extra-records.json"
+        dest: "{{ local_backup_dir }}/extra-records.json"
+        flat: yes
+
+    - name: Fetch traefik webusers to local backup
+      ansible.builtin.fetch:
+        src: "{{ stack_root }}/traefik/webusers"
+        dest: "{{ local_backup_dir }}/webusers"
+        flat: yes
+
+    - name: Backup summary
+      ansible.builtin.debug:
+        msg: "Backup written to {{ local_backup_dir }}/ — restore with: ansible-playbook -i inventory.ini restore_headscale_stack.yml -e backup_timestamp={{ backup_timestamp }} -e confirm_restore=yes"
